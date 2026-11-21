@@ -26,6 +26,8 @@ httpServer.on('upgrade', (req, socket, head) => {
 });
 wss.on('connection', ws => {
   let role = null;
+  let inputWindowStart = Date.now();
+  let inputCount = 0;
   const authTimer = setTimeout(() => ws.close(4401, 'Auth timeout'), 8000);
   ws.on('message', (data, isBinary) => {
     if (!role) {
@@ -49,6 +51,21 @@ wss.on('connection', ws => {
       for (const v of viewers) {
         if (v.readyState === WebSocket.OPEN && v.bufferedAmount < 900000) v.send(data, { binary: true });
       }
+      return;
+    }
+    // Authenticated viewers may send only small JSON input events to the host.
+    if (role === 'viewer' && !isBinary && host && host.readyState === WebSocket.OPEN) {
+      const now = Date.now();
+      if (now - inputWindowStart >= 1000) { inputWindowStart = now; inputCount = 0; }
+      if (inputCount >= 300) return;
+      inputCount++;
+      const text = data.toString();
+      if (text.length > 2048) return;
+      let input; try { input = JSON.parse(text); } catch { return; }
+      const allowed = new Set(['mouse_move','mouse_down','mouse_up','wheel','key_down','key_up','release_all']);
+      if (input && input.type === 'input' && allowed.has(input.action)) {
+        if (host.bufferedAmount < 256000) host.send(JSON.stringify(input));
+      }
     }
   });
   ws.on('close', () => {
@@ -57,7 +74,11 @@ wss.on('connection', ws => {
       host = null;
       for (const v of viewers) if (v.readyState === WebSocket.OPEN) v.send(JSON.stringify({type:'host', online:false}));
     }
-    if (role === 'viewer') viewers.delete(ws);
+    if (role === 'viewer') {
+      viewers.delete(ws);
+      // Avoid stuck keys/buttons if a viewer closes or loses connection.
+      if (host && host.readyState === WebSocket.OPEN) host.send(JSON.stringify({type:'input', action:'release_all'}));
+    }
   });
   ws.on('error', () => {});
 });
