@@ -30,7 +30,8 @@ const httpServer = http.createServer((req, res) => {
   if (req.url === '/health') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('LYNX relay online'); return; }
   res.writeHead(404); res.end('Not found');
 });
-const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+// Screen JPEGs at high quality can exceed 1 MiB; allow bounded larger frames.
+const wss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 });
 
 let host = null;
 let lastFrame = null;      // newest JPEG frame (so late/stalled viewers can be refreshed)
