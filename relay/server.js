@@ -19,6 +19,7 @@ const sendJSON=(ws,obj)=>{if(isOpen(ws))ws.send(JSON.stringify(obj));};
 const deviceList=()=>[...hosts.values()].map(h=>({id:h.id,name:h.name,online:isOpen(h.ws)}));
 function publishDevices(){const devices=deviceList();for(const v of viewers)sendJSON(v,{type:'devices',devices});}
 function selectedHost(v){return v.selectedDeviceId?hosts.get(v.selectedDeviceId):null;}
+function sendViewerCount(deviceId){const h=deviceId?hosts.get(deviceId):null;if(!h||!isOpen(h.ws))return;let count=0;for(const v of viewers)if(v.selectedDeviceId===deviceId&&isOpen(v))count++;sendJSON(h.ws,{type:'viewers',count});}
 function sendSelected(v){const h=selectedHost(v);sendJSON(v,{type:'device_selected',deviceId:h?.id||null,online:!!h&&isOpen(h.ws),name:h?.name||null});if(h?.lastHostInfo)sendJSON(v,h.lastHostInfo);if(h?.lastFrame&&isOpen(h.ws))v.send(h.lastFrame,{binary:true});}
 function keyMatches(input){if(typeof input!=='string')return false;const a=Buffer.from(input),b=Buffer.from(ACCESS_KEY);return a.length===b.length&&crypto.timingSafeEqual(a,b);}
 const fails=new Map(),blocked=new Map();
@@ -40,11 +41,11 @@ wss.on('connection',(ws,req)=>{
     const name=(typeof m.deviceName==='string'&&m.deviceName.trim()?m.deviceName.trim():deviceId).slice(0,100);
     const old=hosts.get(deviceId);if(old&&isOpen(old.ws))old.ws.close(4000,'Same device reconnected');
     hosts.set(deviceId,{id:deviceId,name,ws,lastFrame:null,lastHostInfo:null});
-    sendJSON(ws,{type:'authenticated',role,deviceId});publishDevices();
+    sendJSON(ws,{type:'authenticated',role,deviceId});publishDevices();sendViewerCount(deviceId);
     for(const v of viewers)if(v.selectedDeviceId===deviceId){sendJSON(v,{type:'host',online:true});}
    }else{
     viewers.add(ws);const first=deviceList().find(d=>d.online);ws.selectedDeviceId=first?.id||null;
-    sendJSON(ws,{type:'authenticated',role,hostOnline:!!first,deviceId:ws.selectedDeviceId});publishDevices();sendSelected(ws);
+    sendJSON(ws,{type:'authenticated',role,hostOnline:!!first,deviceId:ws.selectedDeviceId});publishDevices();sendSelected(ws);sendViewerCount(ws.selectedDeviceId);
    }
    return;
   }
@@ -57,7 +58,7 @@ wss.on('connection',(ws,req)=>{
   const text=data.toString();if(text.length>4096)return;let m;try{m=JSON.parse(text);}catch{return;}if(!m)return;
   if(m.type==='ping'){sendJSON(ws,{type:'pong',t:m.t});return;}
   if(m.type==='select_device'&&typeof m.deviceId==='string'){
-   const previous=selectedHost(ws);if(previous&&isOpen(previous.ws))previous.ws.send(JSON.stringify({type:'camera_stop'}));const id=m.deviceId;ws.selectedDeviceId=hosts.has(id)?id:null;sendSelected(ws);sendJSON(ws,{type:'host',online:!!selectedHost(ws)&&isOpen(selectedHost(ws).ws)});return;
+   const previousId=ws.selectedDeviceId;const previous=selectedHost(ws);if(previous&&isOpen(previous.ws))previous.ws.send(JSON.stringify({type:'camera_stop'}));const id=m.deviceId;ws.selectedDeviceId=hosts.has(id)?id:null;sendViewerCount(previousId);sendSelected(ws);sendJSON(ws,{type:'host',online:!!selectedHost(ws)&&isOpen(selectedHost(ws).ws)});sendViewerCount(ws.selectedDeviceId);return;
   }
   const h=selectedHost(ws);if(!h||!isOpen(h.ws))return;
   if(m.type==='input'&&INPUT_ACTIONS.has(m.action)){if(!inputOk())return;if(h.ws.bufferedAmount<256000)h.ws.send(text);}
@@ -67,7 +68,7 @@ wss.on('connection',(ws,req)=>{
  ws.on('close',()=>{
   clearTimeout(authTimer);
   if(role==='host'){const h=hosts.get(deviceId);if(h&&h.ws===ws){hosts.delete(deviceId);publishDevices();for(const v of viewers)if(v.selectedDeviceId===deviceId){sendJSON(v,{type:'host',online:false});sendJSON(v,{type:'device_selected',deviceId,name:h.name,online:false});}}}
-  if(role==='viewer'){viewers.delete(ws);const h=selectedHost(ws);if(h&&isOpen(h.ws)){h.ws.send(JSON.stringify({type:'input',action:'release_all'}));h.ws.send(JSON.stringify({type:'camera_stop'}));}}
+  if(role==='viewer'){const selectedId=ws.selectedDeviceId;viewers.delete(ws);const h=selectedHost(ws);if(h&&isOpen(h.ws)){h.ws.send(JSON.stringify({type:'input',action:'release_all'}));h.ws.send(JSON.stringify({type:'camera_stop'}));}sendViewerCount(selectedId);}
  });ws.on('error',()=>{});
 });
 httpServer.listen(PORT,'0.0.0.0',()=>console.log(`LYNX relay v0.8 listening on ${PORT}`));
