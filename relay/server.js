@@ -8,6 +8,7 @@ if (ACCESS_KEY.length < 24) { console.error('Set LYNX_ACCESS_KEY to a secret at 
 const T_FRAME=1, T_DOWN=2, T_UP=3;
 const INPUT_ACTIONS=new Set(['mouse_move','mouse_down','mouse_up','wheel','key_down','key_up','key_tap','text','release_all','set_profile','request_admin']);
 const FILE_OPS=new Set(['list','upload_begin','upload_end','download','ack','cancel']);
+const CAMERA_OPS=new Set(['camera_start','camera_stop']);
 const HOST_TEXT=new Set(['host_info','file_list','file_ready','file_ack','file_begin','file_done','file_error','notice']);
 const httpServer=http.createServer((req,res)=>{if(req.url==='/health'){res.writeHead(200,{'content-type':'text/plain'});res.end('LYNX relay online');return;}res.writeHead(404);res.end('Not found');});
 const wss=new WebSocketServer({noServer:true,maxPayload:8*1024*1024});
@@ -49,23 +50,24 @@ wss.on('connection',(ws,req)=>{
   }
   if(role==='host'){
    const h=hosts.get(deviceId);if(!h||h.ws!==ws)return;
-   if(isBinary){const kind=data[0];if(kind===T_FRAME){h.lastFrame=data;for(const v of viewers){if(v.selectedDeviceId!==deviceId||!isOpen(v))continue;const b=v.bufferedAmount;if(b<400000){v.send(data,{binary:true});v.stale=false;}else v.stale=true;}}else if(kind===T_DOWN){for(const v of viewers)if(v.selectedDeviceId===deviceId&&isOpen(v))v.send(data,{binary:true});}return;}
+   if(isBinary){const kind=data[0];if(kind===T_FRAME){h.lastFrame=data;for(const v of viewers){if(v.selectedDeviceId!==deviceId||!isOpen(v))continue;const b=v.bufferedAmount;if(b<400000){v.send(data,{binary:true});v.stale=false;}else v.stale=true;}}else if(kind===T_DOWN||kind===4){for(const v of viewers)if(v.selectedDeviceId===deviceId&&isOpen(v))v.send(data,{binary:true});}return;}
    const text=data.toString();if(text.length>524288)return;let m;try{m=JSON.parse(text);}catch{return;}if(!m||!HOST_TEXT.has(m.type))return;if(m.type==='host_info')h.lastHostInfo=text;for(const v of viewers)if(v.selectedDeviceId===deviceId&&isOpen(v))v.send(text);return;
   }
   if(isBinary){const h=selectedHost(ws);if(data.length>5&&data.length<=300*1024&&data[0]===T_UP&&h&&isOpen(h.ws)&&h.ws.bufferedAmount<8*1024*1024)h.ws.send(data,{binary:true});return;}
   const text=data.toString();if(text.length>4096)return;let m;try{m=JSON.parse(text);}catch{return;}if(!m)return;
   if(m.type==='ping'){sendJSON(ws,{type:'pong',t:m.t});return;}
   if(m.type==='select_device'&&typeof m.deviceId==='string'){
-   const id=m.deviceId;ws.selectedDeviceId=hosts.has(id)?id:null;sendSelected(ws);sendJSON(ws,{type:'host',online:!!selectedHost(ws)&&isOpen(selectedHost(ws).ws)});return;
+   const previous=selectedHost(ws);if(previous&&isOpen(previous.ws))previous.ws.send(JSON.stringify({type:'camera_stop'}));const id=m.deviceId;ws.selectedDeviceId=hosts.has(id)?id:null;sendSelected(ws);sendJSON(ws,{type:'host',online:!!selectedHost(ws)&&isOpen(selectedHost(ws).ws)});return;
   }
   const h=selectedHost(ws);if(!h||!isOpen(h.ws))return;
   if(m.type==='input'&&INPUT_ACTIONS.has(m.action)){if(!inputOk())return;if(h.ws.bufferedAmount<256000)h.ws.send(text);}
   else if(m.type==='file'&&FILE_OPS.has(m.op)){if(!fileOk())return;h.ws.send(text);}
+  else if(CAMERA_OPS.has(m.type)){h.ws.send(text);}
  });
  ws.on('close',()=>{
   clearTimeout(authTimer);
   if(role==='host'){const h=hosts.get(deviceId);if(h&&h.ws===ws){hosts.delete(deviceId);publishDevices();for(const v of viewers)if(v.selectedDeviceId===deviceId){sendJSON(v,{type:'host',online:false});sendJSON(v,{type:'device_selected',deviceId,name:h.name,online:false});}}}
-  if(role==='viewer'){viewers.delete(ws);const h=selectedHost(ws);if(h&&isOpen(h.ws))h.ws.send(JSON.stringify({type:'input',action:'release_all'}));}
+  if(role==='viewer'){viewers.delete(ws);const h=selectedHost(ws);if(h&&isOpen(h.ws)){h.ws.send(JSON.stringify({type:'input',action:'release_all'}));h.ws.send(JSON.stringify({type:'camera_stop'}));}}
  });ws.on('error',()=>{});
 });
 httpServer.listen(PORT,'0.0.0.0',()=>console.log(`LYNX relay v0.8 listening on ${PORT}`));
